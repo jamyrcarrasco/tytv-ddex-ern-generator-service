@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { getReleaseWithDetails } from '../repositories/releaseRepository';
 import { generateDdexXml } from '../services/ddexGenerator';
+import { generateAudioSaladDdexXml } from '../services/AudioSalad_ddexGenerator';
+import { DdexGeneratorType } from '../types/ddex';
 
 const router = Router();
 
@@ -10,7 +12,7 @@ const router = Router();
  */
 router.post('/generate', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { releaseId } = req.body;
+    const { releaseId, generatorType = 'standard' } = req.body;
 
     // Validate releaseId
     if (!releaseId) {
@@ -27,6 +29,17 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({
         error: 'Bad Request',
         message: 'releaseId must be a valid positive number',
+      });
+      return;
+    }
+
+    // Validate generatorType
+    const validGeneratorTypes: DdexGeneratorType[] = ['standard', 'audiosalad'];
+    if (generatorType && !validGeneratorTypes.includes(generatorType)) {
+      res.status(400).json({
+        error: 'Bad Request',
+        message: 'generatorType must be either "standard" or "audiosalad"',
+        validTypes: validGeneratorTypes,
       });
       return;
     }
@@ -133,11 +146,14 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate DDEX XML
-    const ddexXml = generateDdexXml(releaseData);
+    // Generate DDEX XML using appropriate generator
+    const ddexXml = generatorType === 'audiosalad' 
+      ? generateAudioSaladDdexXml(releaseData)
+      : generateDdexXml(releaseData);
 
     // Return XML with appropriate content type
     res.setHeader('Content-Type', 'application/xml');
+    res.setHeader('X-Generator-Type', generatorType); // Include generator type in response header
     res.status(200).send(ddexXml);
   } catch (error) {
     console.error('Error generating DDEX XML:', error);

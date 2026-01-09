@@ -8,6 +8,25 @@ import {
 } from '../types/ddex';
 
 /**
+ * Extract relative S3 path from full URL or return path as-is
+ * AudioSalad requires relative paths, not absolute URLs
+ * 
+ * Example transformations:
+ * - https://bucket.s3.amazonaws.com/release_songs/uuid/file.wav → release_songs/uuid/file.wav
+ * - release_songs/uuid/file.wav → release_songs/uuid/file.wav (already relative)
+ */
+function extractS3Path(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    // Remove leading slash from pathname
+    return urlObj.pathname.substring(1);
+  } catch (error) {
+    // If not a valid URL, assume it's already a relative path
+    return url;
+  }
+}
+
+/**
  * Generate a unique message ID
  */
 function generateMessageId(): string {
@@ -127,9 +146,10 @@ function getPrimaryArtists(artists: TrackArtist[]): TrackArtist[] {
 }
 
 /**
- * Generate comprehensive DDEX ERN 3.8.2 XML
+ * Generate AudioSalad-compatible DDEX ERN 3.8.2 XML
+ * Uses relative S3 paths (<FileName>) instead of absolute URLs (<URI>)
  */
-export function generateDdexXml(releaseData: ReleaseWithDetails): string {
+export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): string {
   const { release, tracks } = releaseData;
   const messageId = generateMessageId();
   const sentDateTime = new Date().toISOString();
@@ -292,10 +312,11 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
     const audioCodec = track.sound_format?.toUpperCase() || 'MP3';
     technicalDetails.ele('AudioCodecType').txt(audioCodec).up();
     
-    // File information
+    // File information - AudioSalad uses relative S3 paths, not URLs
     if (track.sound_url) {
+      const s3Path = extractS3Path(track.sound_url);
       technicalDetails.ele('File')
-        .ele('URI').txt(track.sound_url).up()
+        .ele('FileName').txt(s3Path).up()
         .up();
     }
     
@@ -328,8 +349,10 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
       imageTechnical.ele('ImageWidth').txt('3000').up();
     }
     
+    // Image file - AudioSalad uses relative S3 paths, not URLs
+    const imageS3Path = extractS3Path(release.front_pic);
     imageTechnical.ele('File')
-      .ele('URI').txt(release.front_pic).up()
+      .ele('FileName').txt(imageS3Path).up()
       .up();
     
     imageTechnical.up();

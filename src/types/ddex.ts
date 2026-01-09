@@ -128,6 +128,7 @@ export interface Track {
   spotify_id?: string;
   lyrics?: string;
   audio_style?: string;
+  sound_format?: string;
   song_timestamp?: string | Date;
   created_at?: string | Date;
   updated_at?: string | Date;
@@ -266,6 +267,13 @@ export type ArtistRole =
   | 'Engineer'
   | 'Arranger'
   | 'Contributor';
+
+/**
+ * DDEX Generator Type
+ * - standard: Uses absolute URLs (<URI>) for file references
+ * - audiosalad: Uses relative S3 paths (<FileName>) for AudioSalad scanning
+ */
+export type DdexGeneratorType = 'standard' | 'audiosalad';
 
 /**
  * DDEX Message Header Information
