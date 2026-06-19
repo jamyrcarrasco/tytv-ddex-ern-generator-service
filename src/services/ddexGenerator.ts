@@ -315,7 +315,9 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
     
     const imageTechnical = image.ele('TechnicalImageDetails');
     imageTechnical.ele('TechnicalResourceDetailsReference').txt('T_IMG1').up();
-    imageTechnical.ele('ImageCodecType').txt('JPEG').up();
+    const imageExt = release.front_pic.split('.').pop()?.toLowerCase();
+    const imageCodec = imageExt === 'png' ? 'PNG' : 'JPEG';
+    imageTechnical.ele('ImageCodecType').txt(imageCodec).up();
     
     // Parse dimensions if available
     if (release.label?.release_front_art_dimensions) {
@@ -364,7 +366,7 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
   }
 
   // Display title
-  const mainTitle = release.version_title || release.alt_title;
+  const mainTitle = release.title || release.version_title || release.alt_title;
   if (mainTitle) {
     releaseList.ele('DisplayTitleText').txt(mainTitle).up();
   }
@@ -429,13 +431,14 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
   releaseList.ele('ReleaseDate').txt(formatDate(release.date)).up();
 
   // Resource references
+  const refList = releaseList.ele('ReleaseResourceReferenceList');
   tracks.forEach((track) => {
-    releaseList.ele('ResourceReference').txt(`A${track.id}`).up();
+    refList.ele('ReleaseResourceReference', { ReleaseResourceReferenceType: 'PrimaryResource' }).txt(`A${track.id}`).up();
   });
-
   if (release.front_pic) {
-    releaseList.ele('ResourceReference').txt('R1').up();
+    refList.ele('ReleaseResourceReference').txt('R1').up();
   }
+  refList.up();
 
   releaseList.up().up(); // Close Release and ReleaseList
 

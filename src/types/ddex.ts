@@ -74,6 +74,7 @@ export interface Release {
   created_by: number; // Main artist user_id
   release_status_id: number;
   release_type_id: number;
+  title?: string;
   version_title?: string;
   alt_title?: string;
   upc: string; // Required for DDEX

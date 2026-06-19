@@ -116,7 +116,7 @@ export async function uploadReleaseForAudioSalad(
   copiedFiles.push(xmlFilename);
 
   // Upload handshake file to signal transfer is complete
-  const handshakeFilename = `${xmlFilename}.complete`;
+  const handshakeFilename = 'delivery.complete';
   console.log(`[S3] Uploading handshake file → ${destPrefix}/${handshakeFilename}`);
   await s3Client.send(
     new PutObjectCommand({
