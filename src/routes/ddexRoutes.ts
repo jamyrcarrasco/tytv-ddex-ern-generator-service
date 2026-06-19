@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getReleaseWithDetails } from '../repositories/releaseRepository';
 import { generateDdexXml } from '../services/ddexGenerator';
 import { generateAudioSaladDdexXml } from '../services/AudioSalad_ddexGenerator';
+import { uploadReleaseForAudioSalad } from '../services/s3Service';
 import { DdexGeneratorType } from '../types/ddex';
 
 const router = Router();
@@ -146,14 +147,22 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate DDEX XML using appropriate generator
-    const ddexXml = generatorType === 'audiosalad' 
-      ? generateAudioSaladDdexXml(releaseData)
-      : generateDdexXml(releaseData);
+    if (generatorType === 'audiosalad') {
+      const ddexXml = generateAudioSaladDdexXml(releaseData);
+      const s3Result = await uploadReleaseForAudioSalad(releaseData, ddexXml);
+      res.status(200).json({
+        success: true,
+        s3_bucket: s3Result.s3_bucket,
+        s3_path: s3Result.s3_path,
+        files: s3Result.files,
+      });
+      return;
+    }
 
-    // Return XML with appropriate content type
+    // Standard: return XML directly
+    const ddexXml = generateDdexXml(releaseData);
     res.setHeader('Content-Type', 'application/xml');
-    res.setHeader('X-Generator-Type', generatorType); // Include generator type in response header
+    res.setHeader('X-Generator-Type', generatorType);
     res.status(200).send(ddexXml);
   } catch (error) {
     console.error('Error generating DDEX XML:', error);

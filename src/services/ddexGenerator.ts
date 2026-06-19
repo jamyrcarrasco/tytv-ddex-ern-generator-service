@@ -169,12 +169,13 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
     doc.ele('MessageControlType').txt('TestMessage').up();
   }
 
-  doc.up(); // Close MessageHeader
+  // doc points to MessageHeader; capture NewReleaseMessage to add siblings correctly
+  const root = doc.up();
 
   // =============================================
   // 1. RESOURCE LIST
   // =============================================
-  const resourceList = doc.ele('ResourceList');
+  const resourceList = root.ele('ResourceList');
 
   // Add SoundRecording resources for each track
   tracks.forEach((track) => {
@@ -341,7 +342,7 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
   // =============================================
   // 2. RELEASE LIST
   // =============================================
-  const releaseList = doc.ele('ReleaseList').ele('Release');
+  const releaseList = root.ele('ReleaseList').ele('Release');
   
   releaseList.ele('ReleaseReference').txt(`R${release.id}`).up();
   
@@ -441,7 +442,7 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
   // =============================================
   // 3. DEAL LIST - Comprehensive Coverage
   // =============================================
-  const dealList = doc.ele('DealList').ele('ReleaseDeal');
+  const dealList = root.ele('DealList').ele('ReleaseDeal');
   dealList.ele('DealReleaseReference').txt(`R${release.id}`).up();
 
   // Deal 1: Streaming (Subscription Model - Spotify Premium, Apple Music, etc.)
@@ -513,7 +514,7 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
   // 4. RELEASE RELATIONSHIPS
   // =============================================
   if (tracks.length > 1) {
-    const relationships = doc.ele('ReleaseRelationships');
+    const relationships = root.ele('ReleaseRelationships');
 
     tracks.forEach((track, index) => {
       relationships.ele('ResourceRelatedResourceReference')
@@ -525,8 +526,6 @@ export function generateDdexXml(releaseData: ReleaseWithDetails): string {
 
     relationships.up();
   }
-
-  doc.up(); // Close NewReleaseMessage
 
   return doc.end({ prettyPrint: true });
 }

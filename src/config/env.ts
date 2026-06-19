@@ -12,6 +12,13 @@ interface Config {
     database: string;
   };
   apiKeys: string[];
+  s3: {
+    accessKeyId: string;
+    secretAccessKey: string;
+    region: string;
+    ingestBucket: string;
+    ingestBasePath: string;
+  };
 }
 
 /**
@@ -25,6 +32,11 @@ function loadConfig(): Config {
     'DB_PASSWORD',
     'DB_NAME',
     'API_KEYS',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_REGION',
+    'S3_INGEST_BUCKET',
+    'S3_INGEST_BASE_PATH',
   ];
 
   // Check for missing required environment variables
@@ -61,6 +73,13 @@ function loadConfig(): Config {
       database: process.env.DB_NAME as string,
     },
     apiKeys,
+    s3: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
+      region: process.env.AWS_REGION as string,
+      ingestBucket: process.env.S3_INGEST_BUCKET as string,
+      ingestBasePath: process.env.S3_INGEST_BASE_PATH as string,
+    },
   };
 }
 

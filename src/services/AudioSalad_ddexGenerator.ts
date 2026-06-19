@@ -8,21 +8,18 @@ import {
 } from '../types/ddex';
 
 /**
- * Extract relative S3 path from full URL or return path as-is
- * AudioSalad requires relative paths, not absolute URLs
- * 
+ * Extract just the filename from a full S3 URL or path.
+ * AudioSalad scans a flat folder, so <FileName> must be only the basename.
+ *
  * Example transformations:
- * - https://bucket.s3.amazonaws.com/release_songs/uuid/file.wav → release_songs/uuid/file.wav
- * - release_songs/uuid/file.wav → release_songs/uuid/file.wav (already relative)
+ * - https://bucket.s3.amazonaws.com/release_songs/uuid/file.wav → file.wav
+ * - release_songs/uuid/file.wav → file.wav
  */
-function extractS3Path(url: string): string {
+function extractFilename(url: string): string {
   try {
-    const urlObj = new URL(url);
-    // Remove leading slash from pathname
-    return urlObj.pathname.substring(1);
-  } catch (error) {
-    // If not a valid URL, assume it's already a relative path
-    return url;
+    return new URL(url).pathname.split('/').pop() || url;
+  } catch {
+    return url.split('/').pop() || url;
   }
 }
 
@@ -189,12 +186,13 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
     doc.ele('MessageControlType').txt('TestMessage').up();
   }
 
-  doc.up(); // Close MessageHeader
+  // doc points to MessageHeader; capture NewReleaseMessage to add siblings correctly
+  const root = doc.up();
 
   // =============================================
   // 1. RESOURCE LIST
   // =============================================
-  const resourceList = doc.ele('ResourceList');
+  const resourceList = root.ele('ResourceList');
 
   // Add SoundRecording resources for each track
   tracks.forEach((track) => {
@@ -312,11 +310,9 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
     const audioCodec = track.sound_format?.toUpperCase() || 'MP3';
     technicalDetails.ele('AudioCodecType').txt(audioCodec).up();
     
-    // File information - AudioSalad uses relative S3 paths, not URLs
     if (track.sound_url) {
-      const s3Path = extractS3Path(track.sound_url);
       technicalDetails.ele('File')
-        .ele('FileName').txt(s3Path).up()
+        .ele('FileName').txt(extractFilename(track.sound_url)).up()
         .up();
     }
     
@@ -349,10 +345,8 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
       imageTechnical.ele('ImageWidth').txt('3000').up();
     }
     
-    // Image file - AudioSalad uses relative S3 paths, not URLs
-    const imageS3Path = extractS3Path(release.front_pic);
     imageTechnical.ele('File')
-      .ele('FileName').txt(imageS3Path).up()
+      .ele('FileName').txt(extractFilename(release.front_pic)).up()
       .up();
     
     imageTechnical.up();
@@ -364,7 +358,7 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
   // =============================================
   // 2. RELEASE LIST
   // =============================================
-  const releaseList = doc.ele('ReleaseList').ele('Release');
+  const releaseList = root.ele('ReleaseList').ele('Release');
   
   releaseList.ele('ReleaseReference').txt(`R${release.id}`).up();
   
@@ -464,7 +458,7 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
   // =============================================
   // 3. DEAL LIST - Comprehensive Coverage
   // =============================================
-  const dealList = doc.ele('DealList').ele('ReleaseDeal');
+  const dealList = root.ele('DealList').ele('ReleaseDeal');
   dealList.ele('DealReleaseReference').txt(`R${release.id}`).up();
 
   // Deal 1: Streaming (Subscription Model - Spotify Premium, Apple Music, etc.)
@@ -536,7 +530,7 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
   // 4. RELEASE RELATIONSHIPS
   // =============================================
   if (tracks.length > 1) {
-    const relationships = doc.ele('ReleaseRelationships');
+    const relationships = root.ele('ReleaseRelationships');
 
     tracks.forEach((track, index) => {
       relationships.ele('ResourceRelatedResourceReference')
@@ -548,8 +542,6 @@ export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): stri
 
     relationships.up();
   }
-
-  doc.up(); // Close NewReleaseMessage
 
   return doc.end({ prettyPrint: true });
 }
