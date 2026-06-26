@@ -18,6 +18,7 @@ interface Config {
     region: string;
     ingestBucket: string;
     ingestBasePath: string;
+    distributorName: string;
   };
 }
 
@@ -37,6 +38,7 @@ function loadConfig(): Config {
     'AWS_REGION',
     'S3_INGEST_BUCKET',
     'S3_INGEST_BASE_PATH',
+    'AUDIOSALAD_DISTRIBUTOR_NAME',
   ];
 
   // Check for missing required environment variables
@@ -79,6 +81,7 @@ function loadConfig(): Config {
       region: process.env.AWS_REGION as string,
       ingestBucket: process.env.S3_INGEST_BUCKET as string,
       ingestBasePath: process.env.S3_INGEST_BASE_PATH as string,
+      distributorName: process.env.AUDIOSALAD_DISTRIBUTOR_NAME as string,
     },
   };
 }

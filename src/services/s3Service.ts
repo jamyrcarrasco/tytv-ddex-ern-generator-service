@@ -1,6 +1,11 @@
 import { S3Client, CopyObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { config } from '../config/env';
 import { ReleaseWithDetails } from '../types/ddex';
+import {
+  getAudioSaladAudioFilename,
+  getAudioSaladImageFilename,
+  getAudioSaladXmlFilename,
+} from './AudioSalad_ddexGenerator';
 
 const s3Client = new S3Client({
   region: config.s3.region,
@@ -16,11 +21,6 @@ export interface S3UploadResult {
   files: string[];
 }
 
-/**
- * Parses a full S3 URL into bucket and key.
- * Supports path-style: https://bucket.s3.amazonaws.com/key
- * and virtual-hosted-style: https://s3.amazonaws.com/bucket/key
- */
 function parseS3Url(url: string): { bucket: string; key: string } {
   const parsed = new URL(url);
   const hostParts = parsed.hostname.split('.');
@@ -41,14 +41,6 @@ function parseS3Url(url: string): { bucket: string; key: string } {
   };
 }
 
-function extractFilename(url: string): string {
-  try {
-    return new URL(url).pathname.split('/').pop() || url;
-  } catch {
-    return url.split('/').pop() || url;
-  }
-}
-
 async function copyS3Object(sourceUrl: string, destKey: string): Promise<void> {
   const { bucket: sourceBucket, key: sourceKey } = parseS3Url(sourceUrl);
   const copySource = `${sourceBucket}/${sourceKey}`;
@@ -64,17 +56,17 @@ async function copyS3Object(sourceUrl: string, destKey: string): Promise<void> {
   console.log(`[S3] Copied OK: ${destKey}`);
 }
 
-async function uploadXml(destKey: string, xmlContent: string): Promise<void> {
-  console.log(`[S3] Uploading XML → ${config.s3.ingestBucket}/${destKey} (${xmlContent.length} bytes)`);
+async function uploadContent(destKey: string, body: string, contentType: string): Promise<void> {
+  console.log(`[S3] Uploading → ${config.s3.ingestBucket}/${destKey} (${body.length} bytes, ${contentType})`);
   await s3Client.send(
     new PutObjectCommand({
       Bucket: config.s3.ingestBucket,
       Key: destKey,
-      Body: xmlContent,
-      ContentType: 'application/xml',
+      Body: body,
+      ContentType: contentType,
     })
   );
-  console.log(`[S3] XML uploaded OK: ${destKey}`);
+  console.log(`[S3] Uploaded OK: ${destKey}`);
 }
 
 export async function uploadReleaseForAudioSalad(
@@ -82,58 +74,51 @@ export async function uploadReleaseForAudioSalad(
   xmlContent: string
 ): Promise<S3UploadResult> {
   const { release, tracks } = releaseData;
-  const destPrefix = `${config.s3.ingestBasePath}/release-${release.id}`;
-  const copiedFiles: string[] = [];
+  // AudioSalad folder is named by UPC, not release ID
+  const destPrefix = `${config.s3.ingestBasePath}/${release.upc}`;
+  const uploadedFiles: string[] = [];
 
-  console.log(`[S3] Starting upload for release ${release.id} → ${config.s3.ingestBucket}/${destPrefix}`);
+  console.log(`[S3] Starting upload for release ${release.id} (UPC: ${release.upc}) → ${config.s3.ingestBucket}/${destPrefix}`);
   console.log(`[S3] Tracks to copy: ${tracks.length}`);
 
-  // Copy audio files
+  // Copy audio files with AudioSalad naming: {UPC}_1_{trackNumber}.{ext}
   for (const track of tracks) {
     if (track.sound_url) {
-      const filename = extractFilename(track.sound_url);
-      console.log(`[S3] [${tracks.indexOf(track) + 1}/${tracks.length}] Audio: ${track.song_name} (${filename})`);
+      const filename = getAudioSaladAudioFilename(release.upc, track.number, track.sound_url);
+      console.log(`[S3] [${tracks.indexOf(track) + 1}/${tracks.length}] Audio: "${track.song_name}" → ${filename}`);
       await copyS3Object(track.sound_url, `${destPrefix}/${filename}`);
-      copiedFiles.push(filename);
+      uploadedFiles.push(filename);
     } else {
       console.warn(`[S3] Track "${track.song_name}" has no sound_url, skipping`);
     }
   }
 
-  // Copy cover image
+  // Copy cover image with AudioSalad naming: {UPC}.{ext}
   if (release.front_pic) {
-    const filename = extractFilename(release.front_pic);
-    console.log(`[S3] Cover image: ${filename}`);
+    const filename = getAudioSaladImageFilename(release.upc, release.front_pic);
+    console.log(`[S3] Cover image → ${filename}`);
     await copyS3Object(release.front_pic, `${destPrefix}/${filename}`);
-    copiedFiles.push(filename);
+    uploadedFiles.push(filename);
   } else {
     console.warn(`[S3] Release ${release.id} has no cover image`);
   }
 
-  // Upload XML
-  const xmlFilename = `release-${release.id}_ddex.xml`;
-  await uploadXml(`${destPrefix}/${xmlFilename}`, xmlContent);
-  copiedFiles.push(xmlFilename);
+  // Upload XML with AudioSalad naming: {UPC}.xml
+  const xmlFilename = getAudioSaladXmlFilename(release.upc);
+  await uploadContent(`${destPrefix}/${xmlFilename}`, xmlContent, 'application/xml');
+  uploadedFiles.push(xmlFilename);
 
-  // Upload handshake file to signal transfer is complete
+  // Upload delivery.complete handshake file
   const handshakeFilename = 'delivery.complete';
-  console.log(`[S3] Uploading handshake file → ${destPrefix}/${handshakeFilename}`);
-  await s3Client.send(
-    new PutObjectCommand({
-      Bucket: config.s3.ingestBucket,
-      Key: `${destPrefix}/${handshakeFilename}`,
-      Body: '',
-      ContentType: 'application/octet-stream',
-    })
-  );
-  console.log(`[S3] Handshake file uploaded OK: ${handshakeFilename}`);
-  copiedFiles.push(handshakeFilename);
+  console.log(`[S3] Uploading handshake → ${destPrefix}/${handshakeFilename}`);
+  await uploadContent(`${destPrefix}/${handshakeFilename}`, '', 'application/octet-stream');
+  uploadedFiles.push(handshakeFilename);
 
-  console.log(`[S3] Done. ${copiedFiles.length} files in ${destPrefix}:`, copiedFiles);
+  console.log(`[S3] Done. ${uploadedFiles.length} files in ${destPrefix}:`, uploadedFiles);
 
   return {
     s3_bucket: config.s3.ingestBucket,
     s3_path: destPrefix,
-    files: copiedFiles,
+    files: uploadedFiles,
   };
 }

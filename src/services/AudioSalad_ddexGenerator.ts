@@ -1,550 +1,292 @@
 import { create } from 'xmlbuilder2';
-import {
-  ReleaseWithDetails,
-  TrackArtist,
-  ROLE_TO_DDEX_MAP,
-  EXPLICIT_STATUS_MAP,
-  MIX_VERSION_MAP,
-} from '../types/ddex';
+import { ReleaseWithDetails, Track, TrackArtist, ROLE_TO_DDEX_MAP } from '../types/ddex';
+import { config } from '../config/env';
 
-/**
- * Extract just the filename from a full S3 URL or path.
- * AudioSalad scans a flat folder, so <FileName> must be only the basename.
- *
- * Example transformations:
- * - https://bucket.s3.amazonaws.com/release_songs/uuid/file.wav → file.wav
- * - release_songs/uuid/file.wav → file.wav
- */
-function extractFilename(url: string): string {
+// =============================================
+// FILENAME HELPERS — exported for s3Service.ts
+// =============================================
+
+function getFileExt(url: string): string {
   try {
-    return new URL(url).pathname.split('/').pop() || url;
+    return new URL(url).pathname.split('.').pop()?.toLowerCase() || '';
   } catch {
-    return url.split('/').pop() || url;
+    return url.split('.').pop()?.toLowerCase().split('?')[0] || '';
   }
 }
 
-/**
- * Generate a unique message ID
- */
-function generateMessageId(): string {
-  const timestamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
-  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `DDEX${timestamp}${random}`;
+export function getAudioSaladAudioFilename(upc: string, trackNumber: number, url: string): string {
+  const ext = getFileExt(url) || 'wav';
+  return `${upc}_1_${trackNumber}.${ext}`;
 }
 
-/**
- * Format date to DDEX format (YYYY-MM-DD)
- */
+export function getAudioSaladImageFilename(upc: string, url: string): string {
+  const ext = getFileExt(url) || 'jpg';
+  return `${upc}.${ext}`;
+}
+
+export function getAudioSaladXmlFilename(upc: string): string {
+  return `${upc}.xml`;
+}
+
+// =============================================
+// MAPPINGS
+// =============================================
+
+const ISO_TO_LANGUAGE_NAME: Record<string, string> = {
+  es: 'Spanish',
+  en: 'English',
+  pt: 'Portuguese',
+  fr: 'French',
+  de: 'German',
+  it: 'Italian',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+  ar: 'Arabic',
+  ru: 'Russian',
+  hi: 'Hindi',
+};
+
+const RELEASE_FORMAT_MAP: Record<string, string> = {
+  Sencillo: 'Single',
+  Single: 'Single',
+  Album: 'Album',
+  'Álbum': 'Album',
+  EP: 'EP',
+};
+
+const DDEX_ROLE_TO_AUDIOSALAD: Record<string, string> = {
+  MainArtist: 'Main Artist',
+  FeaturedArtist: 'Featured Artist',
+  Producer: 'Producer',
+  Composer: 'Composer',
+  Lyricist: 'Lyricist',
+  Remixer: 'Remixer',
+  MixingEngineer: 'Mixing Engineer',
+  MasteringEngineer: 'Mastering Engineer',
+  Arranger: 'Arranger',
+  Engineer: 'Engineer',
+  Contributor: 'Contributor',
+};
+
+// =============================================
+// HELPERS
+// =============================================
+
 function formatDate(date: Date | string): string {
-  if (typeof date === 'string') {
-    return date.split('T')[0];
-  }
+  if (typeof date === 'string') return date.split('T')[0];
   return date.toISOString().split('T')[0];
 }
 
-/**
- * Convert various duration formats to ISO 8601 duration (PT3M45S)
- */
-function convertToIsoDuration(duration: string): string {
-  // If already in ISO 8601 format
-  if (duration.startsWith('PT')) {
-    return duration;
-  }
-
-  // Parse MM:SS or HH:MM:SS format
-  const parts = duration.split(':').map(p => parseInt(p, 10));
-  
-  if (parts.length === 2) {
-    // MM:SS format
-    const [minutes, seconds] = parts;
-    return `PT${minutes}M${seconds}S`;
-  } else if (parts.length === 3) {
-    // HH:MM:SS format
-    const [hours, minutes, seconds] = parts;
-    if (hours > 0) {
-      return `PT${hours}H${minutes}M${seconds}S`;
-    }
-    return `PT${minutes}M${seconds}S`;
-  }
-
-  // Default fallback
-  return 'PT0S';
+function getLanguageName(code: string | undefined): string {
+  if (!code) return 'English';
+  return ISO_TO_LANGUAGE_NAME[code.toLowerCase()] || 'English';
 }
 
-/**
- * Map role name to DDEX standard role
- */
-function mapRoleToDdex(roleName: string): string {
-  return ROLE_TO_DDEX_MAP[roleName] || 'Contributor';
+function getAdvisory(tracks: Track[]): string {
+  if (tracks.some((t) => t.explicit_status === 'explicit')) return 'Explicit';
+  if (tracks.some((t) => t.explicit_status === 'clean' || t.explicit_status === 'edited')) return 'Clean';
+  return 'None';
 }
 
-/**
- * Map explicit status to DDEX ParentalWarningType
- */
-function mapExplicitStatus(status: string | undefined): string | null {
-  if (!status) return null;
-  return EXPLICIT_STATUS_MAP[status.toLowerCase()] || null;
+function getTrackAdvisory(track: Track): string {
+  if (track.explicit_status === 'explicit') return 'Explicit';
+  if (track.explicit_status === 'clean' || track.explicit_status === 'edited') return 'Clean';
+  return 'None';
 }
 
-/**
- * Map mix version to DDEX VersionType
- */
-function mapMixVersion(mixVersion: string | undefined): string | null {
-  if (!mixVersion) return null;
-  const lowerVersion = mixVersion.toLowerCase();
-  for (const [key, value] of Object.entries(MIX_VERSION_MAP)) {
-    if (lowerVersion.includes(key)) {
-      return value;
-    }
-  }
-  return null;
+function getReleaseFormat(typeName: string | undefined): string {
+  if (!typeName) return 'Album';
+  return RELEASE_FORMAT_MAP[typeName] || typeName;
 }
 
-/**
- * Get artist display name (prefer stage_name > artist_name > name)
- */
-function getArtistName(artist: TrackArtist): string {
+function getArtistDisplayName(artist: TrackArtist): string {
   return artist.stage_name || artist.artist_name || artist.name || 'Unknown Artist';
 }
 
-/**
- * Get main artist name from release
- */
 function getReleaseArtistName(release: any): string {
   return release.stage_name || release.artist_name || release.user_name || 'Unknown Artist';
 }
 
-/**
- * Get label name from release
- */
 function getLabelName(release: any): string {
   return release.label_name || release.record_label || 'Independent Label';
 }
 
-/**
- * Filter artists by role category
- */
-function getArtistsByRole(artists: TrackArtist[], roleName: string): TrackArtist[] {
-  return artists.filter(a => {
-    const mappedRole = mapRoleToDdex(a.role_name || '');
-    return mappedRole === roleName;
-  });
+function mapRoleToAudioSalad(roleName: string | undefined): string {
+  if (!roleName) return 'Contributor';
+  const ddexRole = ROLE_TO_DDEX_MAP[roleName] || roleName;
+  return DDEX_ROLE_TO_AUDIOSALAD[ddexRole] || roleName;
 }
 
-/**
- * Get primary artists (MainArtist or FeaturedArtist)
- */
-function getPrimaryArtists(artists: TrackArtist[]): TrackArtist[] {
-  const mainArtists = getArtistsByRole(artists, 'MainArtist');
-  if (mainArtists.length > 0) {
-    return mainArtists;
-  }
-  return artists.filter(a => a.role_name && a.role_name.toLowerCase().includes('artist'));
+function getImageMimeType(url: string): string {
+  const ext = getFileExt(url);
+  return ext === 'png' ? 'image/png' : 'image/jpg';
 }
 
-/**
- * Generate AudioSalad-compatible DDEX ERN 3.8.2 XML
- * Uses relative S3 paths (<FileName>) instead of absolute URLs (<URI>)
- */
+function getAudioMimeType(url: string): string {
+  const ext = getFileExt(url) || 'wav';
+  return `audio/${ext}`;
+}
+
+// =============================================
+// MAIN GENERATOR
+// =============================================
+
 export function generateAudioSaladDdexXml(releaseData: ReleaseWithDetails): string {
   const { release, tracks } = releaseData;
-  const messageId = generateMessageId();
-  const sentDateTime = new Date().toISOString();
-  const labelName = getLabelName(release);
   const releaseArtistName = getReleaseArtistName(release);
+  const labelName = getLabelName(release);
+  const mainTitle = release.title || release.version_title || release.alt_title || '';
+  const releaseDate = formatDate(release.date);
+  const advisory = getAdvisory(tracks);
+  const audioLanguage = getLanguageName(tracks[0]?.song_language_code);
+  const releaseFormat = getReleaseFormat(release.release_type_name);
+  const genreName = tracks[0]?.main_genre_en || '';
+  const clineText = release.label_cline || release.cline || '';
+  const clineYear = release.cline_year || parseInt(release.date.split('-')[0], 10);
+  const plineText = release.label_pline || release.pline || '';
+  const plineYear = release.pline_year || parseInt(release.date.split('-')[0], 10);
+  const rightsHolders = release.record_label || labelName;
 
-  const doc = create({ version: '1.0', encoding: 'UTF-8' })
-    .ele('ern:NewReleaseMessage', {
-      'xmlns:ern': 'http://ddex.net/xml/ern/38',
-      'xmlns:xs': 'http://www.w3.org/2001/XMLSchema-instance',
-      MessageSchemaVersionId: 'ern/382',
-      LanguageAndScriptCode: 'en',
-    })
+  const doc = create({ version: '1.0', encoding: 'UTF-8' }).ele('release', {
+    xmlns: 'audiosalad_release_v3.4',
+    'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+    'xsi:schemaLocation':
+      'audiosalad_release_v3.4 http://audiosalad-xsd.s3.amazonaws.com/audiosalad_release_v3.4.xsd',
+  });
 
-    // =============================================
-    // MESSAGE HEADER
-    // =============================================
-    .ele('MessageHeader')
-    .ele('MessageThreadId').txt(messageId).up()
-    .ele('MessageId').txt(messageId).up()
-    .ele('MessageCreatedDateTime').txt(sentDateTime).up()
-    .ele('MessageSender')
-    .ele('PartyId').txt('DPID:PADPIDA2014071501Y').up()
-    .ele('PartyName')
-    .ele('FullName').txt(labelName).up()
-    .up()
-    .up()
-    .ele('MessageRecipient')
-    .ele('PartyId').txt('DPID:PADPIDA2013011301U').up()
-    .ele('PartyName')
-    .ele('FullName').txt('Digital Service Provider').up()
-    .up()
+  doc.ele('schema_id').txt('audiosalad_release_v3.4').up();
+  doc.ele('distributor_name').txt(config.s3.distributorName).up();
+  doc.ele('export_id').txt(release.id.toString()).up();
+  doc.ele('export_time').txt(new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')).up();
+  doc.ele('action').txt('add').up();
+  doc.ele('upc_ean').txt(release.upc).up();
+  doc.ele('catalog_id').txt(release.catalog || release.upc).up();
+  doc.ele('title').txt(mainTitle).up();
+  doc.ele('advisory').txt(advisory).up();
+  doc.ele('metadata_language').txt('English').up();
+  doc.ele('audio_language').txt(audioLanguage).up();
+  doc.ele('display_artist').txt(releaseArtistName).up();
+
+  doc
+    .ele('participant')
+    .ele('role').txt('Primary Artist').up()
+    .ele('name').txt(releaseArtistName).up()
+    .ele('primary').txt('true').up()
     .up();
 
-  // Add catalog number if available
-  if (release.catalog) {
-    doc.ele('MessageControlType').txt('TestMessage').up();
+  doc.ele('compilation').txt('false').up();
+  doc.ele('original_release_date').txt(releaseDate).up();
+  doc.ele('release_date').txt(releaseDate).up();
+  doc.ele('release_format').txt(releaseFormat).up();
+
+  if (genreName) {
+    doc.ele('genre').ele('primary').txt(genreName).up().up();
   }
 
-  // doc points to MessageHeader; capture NewReleaseMessage to add siblings correctly
-  const root = doc.up();
+  if (clineText) {
+    doc.ele('c_info').txt(clineText).up();
+    doc.ele('c_year').txt(clineYear.toString()).up();
+  }
+  if (plineText) {
+    doc.ele('p_info').txt(plineText).up();
+    doc.ele('p_year').txt(plineYear.toString()).up();
+  }
 
-  // =============================================
-  // 1. RESOURCE LIST
-  // =============================================
-  const resourceList = root.ele('ResourceList');
+  doc.ele('rights_holders').txt(rightsHolders).up();
 
-  // Add SoundRecording resources for each track
+  doc.ele('label').ele('name').txt(labelName).up().up();
+
+  doc.ele('price_tier').ele('type').txt('itunes_track').up().ele('name').txt('Front').up().up();
+  doc.ele('price_tier').ele('type').txt('itunes').up().ele('name').txt('Front One').up().up();
+
+  doc
+    .ele('territory')
+    .ele('country_code').txt('WW').up()
+    .ele('release_date').txt(`${releaseDate}T00:00:00`).up()
+    .up();
+
+  if (release.front_pic) {
+    const imageFilename = getAudioSaladImageFilename(release.upc, release.front_pic);
+    doc
+      .ele('asset')
+      .ele('type').txt('image').up()
+      .ele('sub_type').txt('Front').up()
+      .ele('format').txt(getImageMimeType(release.front_pic)).up()
+      .ele('file_name').txt(imageFilename).up()
+      .up();
+  }
+
   tracks.forEach((track) => {
     const trackArtists = track.artists || [];
-    const primaryArtists = getPrimaryArtists(trackArtists);
-    const contributors = trackArtists;
+    const trackLanguage = getLanguageName(track.song_language_code);
 
-    const soundRecording = resourceList.ele('SoundRecording');
-    
-    // Resource reference and type
-    soundRecording.ele('ResourceReference').txt(`A${track.id}`).up();
-    soundRecording.ele('Type').txt('MusicalWorkSoundRecording').up();
-    
-    // Resource ID (ISRC)
-    soundRecording.ele('ResourceId')
-      .ele('ISRC').txt(track.isrc).up()
+    const mainArtistEntry = trackArtists.find(
+      (a) => ROLE_TO_DDEX_MAP[a.role_name || ''] === 'MainArtist'
+    );
+    const trackArtistName = mainArtistEntry
+      ? getArtistDisplayName(mainArtistEntry)
+      : releaseArtistName;
+
+    const trackEle = doc.ele('track');
+    trackEle.ele('isrc').txt(track.isrc).up();
+    trackEle.ele('disc_number').txt('1').up();
+    trackEle.ele('track_number').txt(track.number.toString()).up();
+    trackEle.ele('title').txt(track.song_name).up();
+    trackEle.ele('advisory').txt(getTrackAdvisory(track)).up();
+    trackEle.ele('audio_language').txt(trackLanguage).up();
+    trackEle.ele('display_artist').txt(trackArtistName).up();
+
+    trackEle
+      .ele('participant')
+      .ele('role').txt('Main Artist').up()
+      .ele('name').txt(trackArtistName).up()
+      .ele('primary').txt('true').up()
       .up();
 
-    // Display title
-    soundRecording.ele('DisplayTitleText').txt(track.song_name).up();
-
-    // Version title if mix version exists
-    const versionType = mapMixVersion(track.mix_version);
-    if (versionType && track.mix_version) {
-      soundRecording.ele('DisplayTitle')
-        .ele('TitleText').txt(`${track.song_name} (${track.mix_version})`).up()
-        .ele('SubTitle').txt(track.mix_version).up()
-        .up();
-    }
-
-    // Display artists
-    if (primaryArtists.length > 0) {
-      primaryArtists.forEach((artist) => {
-        const ddexRole = mapRoleToDdex(artist.role_name || '');
-        soundRecording.ele('DisplayArtist')
-          .ele('PartyName')
-          .ele('FullName').txt(getArtistName(artist)).up()
-          .up()
-          .ele('ArtistRole').txt(ddexRole).up()
+    trackArtists
+      .filter((a) => ROLE_TO_DDEX_MAP[a.role_name || ''] !== 'MainArtist')
+      .forEach((artist) => {
+        trackEle
+          .ele('participant')
+          .ele('role').txt(mapRoleToAudioSalad(artist.role_name)).up()
+          .ele('name').txt(getArtistDisplayName(artist)).up()
+          .ele('primary').txt('false').up()
           .up();
       });
-    } else {
-      // Fallback to release main artist
-      soundRecording.ele('DisplayArtist')
-        .ele('PartyName')
-        .ele('FullName').txt(releaseArtistName).up()
-        .up()
-        .ele('ArtistRole').txt('MainArtist').up()
-        .up();
-    }
 
-    // Contributors (all roles)
-    contributors.forEach((artist) => {
-      const ddexRole = mapRoleToDdex(artist.role_name || '');
-      soundRecording.ele('Contributor')
-        .ele('PartyName')
-        .ele('FullName').txt(getArtistName(artist)).up()
-        .up()
-        .ele('Role').txt(ddexRole).up()
-        .up();
-    });
-
-    // Language of performance
-    if (track.song_language_code) {
-      soundRecording.ele('LanguageOfPerformance').txt(track.song_language_code).up();
-    }
-
-    // Parental warning (explicit content)
-    const parentalWarning = mapExplicitStatus(track.explicit_status);
-    if (parentalWarning) {
-      soundRecording.ele('ParentalWarningType').txt(parentalWarning).up();
-    }
-
-    // PLine (use label's pline or release's pline)
-    const plineText = release.label_pline || release.pline;
-    const plineYear = release.pline_year || parseInt(release.date.split('-')[0], 10);
-    if (plineText) {
-      soundRecording.ele('PLine')
-        .ele('Year').txt(plineYear.toString()).up()
-        .ele('PLineText').txt(plineText).up()
-        .up();
-    }
-
-    // Genres (primary and secondary)
     if (track.main_genre_en) {
-      soundRecording.ele('Genre')
-        .ele('GenreText').txt(track.main_genre_en).up()
-        .up();
-    }
-    if (track.secondary_genre_en) {
-      soundRecording.ele('Genre')
-        .ele('GenreText').txt(track.secondary_genre_en).up()
-        .up();
+      trackEle.ele('genre').ele('primary').txt(track.main_genre_en).up().up();
     }
 
-    // Duration
-    const duration = convertToIsoDuration(track.sound_length);
-    soundRecording.ele('Duration').txt(duration).up();
-
-    // Lyrics information
-    if (track.has_lyrics) {
-      soundRecording.ele('ContainsLyrics').txt('true').up();
-      
-      // Language of lyrics
-      if (track.lyrics_language_code) {
-        soundRecording.ele('LanguageOfLyrics').txt(track.lyrics_language_code).up();
-      }
+    if (clineText) {
+      trackEle.ele('c_info').txt(clineText).up();
+      trackEle.ele('c_year').txt(clineYear.toString()).up();
+    }
+    if (plineText) {
+      trackEle.ele('p_info').txt(plineText).up();
+      trackEle.ele('p_year').txt(plineYear.toString()).up();
     }
 
-    // Technical sound recording details
-    const technicalDetails = soundRecording.ele('TechnicalSoundRecordingDetails');
-    technicalDetails.ele('TechnicalResourceDetailsReference').txt(`T${track.id}`).up();
-    
-    // Audio codec (determine from audio_style or default to MP3)
-    const audioCodec = track.sound_format?.toUpperCase() || 'MP3';
-    technicalDetails.ele('AudioCodecType').txt(audioCodec).up();
-    
+    trackEle.ele('rights_holders').txt(rightsHolders).up();
+
+    trackEle.ele('price_tier').ele('type').txt('itunes_track').up().ele('name').txt('Front').up().up();
+
+    trackEle.ele('permission').ele('type').txt('track_sale').up().ele('enabled').txt('true').up().up();
+
     if (track.sound_url) {
-      technicalDetails.ele('File')
-        .ele('FileName').txt(extractFilename(track.sound_url)).up()
+      const audioFilename = getAudioSaladAudioFilename(release.upc, track.number, track.sound_url);
+      trackEle
+        .ele('asset')
+        .ele('type').txt('audio').up()
+        .ele('sub_type').txt(getFileExt(track.sound_url) || 'wav').up()
+        .ele('format').txt(getAudioMimeType(track.sound_url)).up()
+        .ele('file_name').txt(audioFilename).up()
         .up();
     }
-    
-    technicalDetails.up(); // Close TechnicalSoundRecordingDetails
-    soundRecording.up(); // Close SoundRecording
+
+    trackEle.up();
   });
 
-  // Add Image resource for cover art
-  if (release.front_pic) {
-    const image = resourceList.ele('Image');
-    image.ele('ResourceReference').txt('R1').up();
-    image.ele('Type').txt('FrontCoverImage').up();
-    image.ele('ResourceId')
-      .ele('ProprietaryId').txt(`IMG${release.id}`).up()
-      .up();
-    
-    const imageTechnical = image.ele('TechnicalImageDetails');
-    imageTechnical.ele('TechnicalResourceDetailsReference').txt('T_IMG1').up();
-    const imageExt = release.front_pic.split('.').pop()?.toLowerCase();
-    const imageCodec = imageExt === 'png' ? 'PNG' : 'JPEG';
-    imageTechnical.ele('ImageCodecType').txt(imageCodec).up();
-    
-    // Parse dimensions if available
-    if (release.label?.release_front_art_dimensions) {
-      const dimensions = release.label.release_front_art_dimensions.split('x');
-      if (dimensions.length === 2) {
-        imageTechnical.ele('ImageHeight').txt(dimensions[1].trim()).up();
-        imageTechnical.ele('ImageWidth').txt(dimensions[0].trim()).up();
-      }
-    } else {
-      imageTechnical.ele('ImageHeight').txt('3000').up();
-      imageTechnical.ele('ImageWidth').txt('3000').up();
-    }
-    
-    imageTechnical.ele('File')
-      .ele('FileName').txt(extractFilename(release.front_pic)).up()
-      .up();
-    
-    imageTechnical.up();
-    image.up();
-  }
-
-  resourceList.up(); // Close ResourceList
-
-  // =============================================
-  // 2. RELEASE LIST
-  // =============================================
-  const releaseList = root.ele('ReleaseList').ele('Release');
-  
-  releaseList.ele('ReleaseReference').txt(`R${release.id}`).up();
-  
-  // Release type (map from database)
-  const releaseType = release.release_type_name || 'Album';
-  const ddexReleaseType = releaseType === 'Sencillo' ? 'Single' : releaseType;
-  releaseList.ele('ReleaseType').txt(ddexReleaseType).up();
-  
-  // Release ID (UPC/EAN)
-  releaseList.ele('ReleaseId')
-    .ele('ICPN').txt(release.upc).up()
-    .up();
-  
-  // Catalog number
-  if (release.catalog) {
-    releaseList.ele('ReleaseId')
-      .ele('CatalogNumber').txt(release.catalog).up()
-      .up();
-  }
-
-  // Display title
-  const mainTitle = release.title || release.version_title || release.alt_title;
-  if (mainTitle) {
-    releaseList.ele('DisplayTitleText').txt(mainTitle).up();
-  }
-  
-  // Alternative title
-  if (release.alt_title && release.alt_title !== mainTitle) {
-    releaseList.ele('DisplayTitle')
-      .ele('TitleText').txt(release.alt_title).up()
-      .ele('TitleType').txt('AlternativeTitle').up()
-      .up();
-  }
-
-  // Display artist (main release artist)
-  releaseList.ele('DisplayArtist')
-    .ele('PartyName')
-    .ele('FullName').txt(releaseArtistName).up()
-    .up()
-    .ele('ArtistRole').txt('MainArtist').up()
-    .up();
-
-  // Label information
-  releaseList.ele('AdministratingRecordCompany')
-    .ele('PartyName')
-    .ele('FullName').txt(labelName).up()
-    .up()
-    .up();
-
-  // CLine (copyright)
-  const clineText = release.label_cline || release.cline;
-  const clineYear = release.cline_year || parseInt(release.date.split('-')[0], 10);
-  if (clineText) {
-    releaseList.ele('CLine')
-      .ele('Year').txt(clineYear.toString()).up()
-      .ele('CLineText').txt(clineText).up()
-      .up();
-  }
-
-  // PLine (phonographic copyright)
-  const plineText = release.label_pline || release.pline;
-  const plineYear = release.pline_year || parseInt(release.date.split('-')[0], 10);
-  if (plineText) {
-    releaseList.ele('PLine')
-      .ele('Year').txt(plineYear.toString()).up()
-      .ele('PLineText').txt(plineText).up()
-      .up();
-  }
-
-  // Genres (from first track)
-  if (tracks.length > 0 && tracks[0].main_genre_en) {
-    releaseList.ele('Genre')
-      .ele('GenreText').txt(tracks[0].main_genre_en).up()
-      .up();
-    
-    if (tracks[0].secondary_genre_en) {
-      releaseList.ele('Genre')
-        .ele('GenreText').txt(tracks[0].secondary_genre_en).up()
-        .up();
-    }
-  }
-
-  // Release date
-  releaseList.ele('ReleaseDate').txt(formatDate(release.date)).up();
-
-  // Resource references
-  const refList = releaseList.ele('ReleaseResourceReferenceList');
-  tracks.forEach((track) => {
-    refList.ele('ReleaseResourceReference', { ReleaseResourceReferenceType: 'PrimaryResource' }).txt(`A${track.id}`).up();
-  });
-  if (release.front_pic) {
-    refList.ele('ReleaseResourceReference').txt('R1').up();
-  }
-  refList.up();
-
-  releaseList.up().up(); // Close Release and ReleaseList
-
-  // =============================================
-  // 3. DEAL LIST - Comprehensive Coverage
-  // =============================================
-  const dealList = root.ele('DealList').ele('ReleaseDeal');
-  dealList.ele('DealReleaseReference').txt(`R${release.id}`).up();
-
-  // Deal 1: Streaming (Subscription Model - Spotify Premium, Apple Music, etc.)
-  dealList.ele('Deal')
-    .ele('DealTerms')
-    .ele('CommercialModelType').txt('SubscriptionModel').up()
-    .ele('UseType').txt('OnDemandStream').up()
-    .ele('TerritoryCode').txt('Worldwide').up()
-    .ele('ValidityPeriod')
-    .ele('StartDate').txt(formatDate(release.date)).up()
-    .up()
-    .up()
-    .up();
-
-  // Deal 2: Download (Pay-as-you-go - iTunes, Amazon Music)
-  dealList.ele('Deal')
-    .ele('DealTerms')
-    .ele('CommercialModelType').txt('PayAsYouGoModel').up()
-    .ele('UseType').txt('PermanentDownload').up()
-    .ele('TerritoryCode').txt('Worldwide').up()
-    .ele('ValidityPeriod')
-    .ele('StartDate').txt(formatDate(release.date)).up()
-    .up()
-    .ele('PriceInformation')
-    .ele('BulkOrderWholesalePricePerUnit').txt('0.99').up()
-    .up()
-    .up()
-    .up();
-
-  // Deal 3: Free Streaming (Ad-supported - Free Spotify, YouTube Music Free)
-  dealList.ele('Deal')
-    .ele('DealTerms')
-    .ele('CommercialModelType').txt('AdvertisementSupportedModel').up()
-    .ele('UseType').txt('OnDemandStream').up()
-    .ele('TerritoryCode').txt('Worldwide').up()
-    .ele('ValidityPeriod')
-    .ele('StartDate').txt(formatDate(release.date)).up()
-    .up()
-    .up()
-    .up();
-
-  // Deal 4: Conditional Download (Subscription offline - Spotify/Apple Music offline)
-  dealList.ele('Deal')
-    .ele('DealTerms')
-    .ele('CommercialModelType').txt('SubscriptionModel').up()
-    .ele('UseType').txt('ConditionalDownload').up()
-    .ele('TerritoryCode').txt('Worldwide').up()
-    .ele('ValidityPeriod')
-    .ele('StartDate').txt(formatDate(release.date)).up()
-    .up()
-    .up()
-    .up();
-
-  // Deal 5: User-Made Clips (TikTok, Instagram Reels, YouTube Shorts)
-  dealList.ele('Deal')
-    .ele('DealTerms')
-    .ele('CommercialModelType').txt('AdvertisementSupportedModel').up()
-    .ele('UseType').txt('UserMadeClip').up()
-    .ele('TerritoryCode').txt('Worldwide').up()
-    .ele('ValidityPeriod')
-    .ele('StartDate').txt(formatDate(release.date)).up()
-    .up()
-    .up()
-    .up();
-
-  dealList.up().up(); // Close ReleaseDeal and DealList
-
-  // =============================================
-  // 4. RELEASE RELATIONSHIPS
-  // =============================================
-  if (tracks.length > 1) {
-    const relationships = root.ele('ReleaseRelationships');
-
-    tracks.forEach((track, index) => {
-      relationships.ele('ResourceRelatedResourceReference')
-        .ele('ResourceRelatedResourceReference').txt(`A${track.id}`).up()
-        .ele('ReleaseResourceReference').txt(`R${release.id}`).up()
-        .ele('SequenceNumber').txt((index + 1).toString()).up()
-        .up();
-    });
-
-    relationships.up();
-  }
-
-  return doc.end({ prettyPrint: true });
+  return doc.end({ prettyPrint: true, indent: '  ' });
 }
