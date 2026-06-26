@@ -50,3 +50,86 @@ POST /api/ddex/generate
 - Any changes to XML structure must validate against the [DDEX ERN 3.8.2 spec](https://ddex.net/standards/ern/382/).
 - `sound_length` is stored as `MM:SS` or `HH:MM:SS` in the DB; `convertToIsoDuration()` in `ddexGenerator.ts` normalizes it to ISO 8601 (`PT3M45S`).
 - The sender `PartyId` (`PADPIDA2014071501Y`) and recipient `PartyId` (`PADPIDA2013011301U`) in `MessageHeader` are hardcoded DDEX party identifiers.
+
+## AudioSalad Ingestion — S3 File Naming
+
+For `generatorType: audiosalad`, files are uploaded to `{S3_INGEST_BUCKET}/{S3_INGEST_BASE_PATH}/{UPC}/`:
+
+| File | Naming convention |
+|---|---|
+| Audio tracks | `{UPC}_1_{trackNumber}.{ext}` (e.g. `730734944249_1_1.wav`) |
+| Cover image | `{UPC}.{ext}` (e.g. `730734944249.jpg`) |
+| DDEX XML | `{UPC}.xml` |
+| Handshake | `delivery.complete` (empty file; triggers AudioSalad scan) |
+
+The `1` in audio filenames is the disc number (hardcoded; all releases are single-disc).
+
+---
+
+## Production Readiness Checklist
+
+This service is not yet production-ready. Below is everything that must be done before consuming it from the main TranKYouTV backend in production.
+
+### Priority 1 — Required before go-live
+
+**[ ] DELETE endpoint for S3 cleanup**
+Add `DELETE /api/ddex/ingestion/:upc` that removes all files in the `{basePath}/{UPC}/` folder (audio, image, XML, `delivery.complete`). This is needed to clean a dirty or failed ingestion before re-uploading. Without this there is no recovery path when an ingestion goes wrong.
+
+**[ ] Ingestion tracking table in the main backend DB**
+The main TranKYouTV backend must persist the result of every upload to support fallbacks, re-ingestion, and auditing. Suggested schema:
+
+```sql
+CREATE TABLE release_ingestions (
+  id              INT PRIMARY KEY AUTO_INCREMENT,
+  release_id      INT NOT NULL,
+  upc             VARCHAR(20) NOT NULL,
+  distributor     VARCHAR(50) NOT NULL DEFAULT 'audiosalad',
+  s3_bucket       VARCHAR(100),
+  s3_path         VARCHAR(200),
+  files           JSON,
+  status          ENUM('pending','uploaded','scanning','delivered','failed','deleted'),
+  error_message   TEXT,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_release_distributor (release_id, distributor)
+);
+```
+
+**[ ] Rollback on partial S3 upload failure**
+Currently, if a file copy fails midway the S3 folder is left in a dirty state (some files present, `delivery.complete` never uploaded). The upload must either succeed fully or clean up after itself. Implement try/catch around `uploadReleaseForAudioSalad` that calls the delete logic on any error before re-throwing.
+
+**[ ] Idempotency guard**
+Calling the endpoint twice for the same release silently overwrites files in S3. Before uploading, check if the UPC folder already contains a `delivery.complete` file and return a 409 Conflict with a message directing the caller to delete first.
+
+**[ ] Source file validation before copy**
+Before attempting to copy audio/image files from the source bucket, verify they exist with a `HeadObjectCommand`. A missing source file currently throws a cryptic S3 error. Return a clear 400 with the missing file URL so the caller knows what to fix.
+
+### Priority 2 — Operational
+
+**[ ] Structured JSON logging**
+Replace all `console.log` / `console.warn` / `console.error` with a structured logger (e.g. `pino`). Each log line should include at minimum: `level`, `timestamp`, `releaseId`, `upc`, `message`. This is required for any log aggregation tool (CloudWatch, Datadog, etc.).
+
+**[ ] Health check with real DB ping**
+`GET /api/ddex/health` currently returns `ok` unconditionally. It should also run a lightweight DB query (e.g. `SELECT 1`) and return 503 if the DB is unreachable.
+
+**[ ] S3 operation timeout / retry**
+Large audio files can cause S3 copy operations to hang. Configure a timeout and add retry logic (with exponential backoff) for transient S3 errors.
+
+**[ ] Per-environment S3 config**
+Use separate S3 buckets for staging and production. The env var `S3_INGEST_BUCKET` already supports this but there is no `.env.staging` or deployment documentation for how to switch environments.
+
+### Priority 3 — Full ingestion lifecycle (post go-live)
+
+**[ ] AudioSalad delivery status tracking**
+AudioSalad processes the folder after `delivery.complete` is uploaded. There is currently no way to know when processing is complete or if it failed. Options: (a) AudioSalad webhook → endpoint in this service that updates `release_ingestions.status`, or (b) polling job in the main backend that checks AudioSalad's API.
+
+**[ ] Re-ingestion flow documentation**
+Document the exact sequence for re-delivering a failed release:
+1. `DELETE /api/ddex/ingestion/:upc` — cleans S3 folder
+2. Update `release_ingestions.status = 'deleted'` in main backend DB
+3. Fix whatever caused the failure (bad audio file, wrong metadata, etc.)
+4. `POST /api/ddex/generate` — re-uploads everything
+5. Update `release_ingestions` with new upload result
+
+**[ ] Deployment setup**
+No `Dockerfile`, no process manager config (`pm2`, systemd), no CI/CD pipeline. Define how this service is deployed and restarted alongside the main backend.
