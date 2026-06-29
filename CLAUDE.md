@@ -132,4 +132,17 @@ Document the exact sequence for re-delivering a failed release:
 5. Update `release_ingestions` with new upload result
 
 **[ ] Deployment setup**
-No `Dockerfile`, no process manager config (`pm2`, systemd), no CI/CD pipeline. Define how this service is deployed and restarted alongside the main backend.
+Deploy to the **same DigitalOcean Droplet** where the main TranKYouTV backend runs. Both services share the same VPC and the managed DB is already accessible internally. Steps:
+
+1. SSH into the Droplet and clone this repo
+2. Copy `.env` with production values (DB internal host, S3 credentials, API keys)
+3. Run `npm install && npm run build`
+4. Use `pm2` to manage the process:
+   ```bash
+   pm2 start dist/server.js --name tytv-ddex-generator
+   pm2 save
+   ```
+5. Configure Nginx to reverse proxy the port (e.g. `proxy_pass http://localhost:4000`) under a subdomain like `ddex.trankyoutv.com`
+6. The main backend calls this service internally via `http://localhost:4000` (same machine, no external network hop needed)
+
+No Dockerfile needed for this setup. If the service is ever moved to its own Droplet or App Platform, add one then.
