@@ -72,8 +72,8 @@ This service is not yet production-ready. Below is everything that must be done 
 
 ### Priority 1 — Required before go-live
 
-**[ ] DELETE endpoint for S3 cleanup**
-Add `DELETE /api/ddex/ingestion/:upc` that removes all files in the `{basePath}/{UPC}/` folder (audio, image, XML, `delivery.complete`). This is needed to clean a dirty or failed ingestion before re-uploading. Without this there is no recovery path when an ingestion goes wrong.
+**[x] DELETE endpoint for S3 cleanup**
+`DELETE /api/ddex/ingestion/:upc` — lists and batch-deletes all files under `{basePath}/{UPC}/`. Returns `200 { deleted[] }`, `404` if folder was empty, `400` if UPC missing. Implemented in `s3Service.deleteReleaseFromS3` + `ddexRoutes`.
 
 **[ ] Ingestion tracking table in the main backend DB**
 The main TranKYouTV backend must persist the result of every upload to support fallbacks, re-ingestion, and auditing. Suggested schema:

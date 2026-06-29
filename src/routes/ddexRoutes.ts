@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getReleaseWithDetails } from '../repositories/releaseRepository';
 import { generateDdexXml } from '../services/ddexGenerator';
 import { generateAudioSaladDdexXml } from '../services/AudioSalad_ddexGenerator';
-import { uploadReleaseForAudioSalad } from '../services/s3Service';
+import { uploadReleaseForAudioSalad, deleteReleaseFromS3 } from '../services/s3Service';
 import { DdexGeneratorType } from '../types/ddex';
 
 const router = Router();
@@ -169,6 +169,36 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({
       error: 'Internal Server Error',
       message: 'An error occurred while generating DDEX XML',
+    });
+  }
+});
+
+/**
+ * DELETE /api/ddex/ingestion/:upc
+ * Delete all S3 files for an AudioSalad ingestion folder by UPC
+ */
+router.delete('/ingestion/:upc', async (req: Request, res: Response): Promise<void> => {
+  const { upc } = req.params;
+
+  if (!upc || upc.trim() === '') {
+    res.status(400).json({ error: 'Bad Request', message: 'upc param is required' });
+    return;
+  }
+
+  try {
+    const result = await deleteReleaseFromS3(upc);
+
+    if (result.deleted.length === 0) {
+      res.status(404).json({ error: 'Not Found', message: `No files found for UPC ${upc}` });
+      return;
+    }
+
+    res.status(200).json({ success: true, upc, deleted: result.deleted });
+  } catch (error) {
+    console.error(`Error deleting S3 ingestion for UPC ${upc}:`, error);
+    res.status(500).json({
+      error: 'Internal Server Error',
+      message: 'An error occurred while deleting the ingestion files',
     });
   }
 });

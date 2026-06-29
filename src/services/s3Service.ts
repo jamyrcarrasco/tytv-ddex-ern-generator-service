@@ -1,4 +1,4 @@
-import { S3Client, CopyObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, CopyObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { config } from '../config/env';
 import { ReleaseWithDetails } from '../types/ddex';
 import {
@@ -121,4 +121,37 @@ export async function uploadReleaseForAudioSalad(
     s3_path: destPrefix,
     files: uploadedFiles,
   };
+}
+
+export async function deleteReleaseFromS3(upc: string): Promise<{ deleted: string[] }> {
+  const prefix = `${config.s3.ingestBasePath}/${upc}/`;
+
+  console.log(`[S3] Listing objects to delete: ${config.s3.ingestBucket}/${prefix}`);
+  const listResult = await s3Client.send(
+    new ListObjectsV2Command({
+      Bucket: config.s3.ingestBucket,
+      Prefix: prefix,
+    })
+  );
+
+  const objects = listResult.Contents ?? [];
+
+  if (objects.length === 0) {
+    console.log(`[S3] No files found under ${prefix}`);
+    return { deleted: [] };
+  }
+
+  await s3Client.send(
+    new DeleteObjectsCommand({
+      Bucket: config.s3.ingestBucket,
+      Delete: {
+        Objects: objects.map((o) => ({ Key: o.Key! })),
+        Quiet: true,
+      },
+    })
+  );
+
+  const deleted = objects.map((o) => o.Key!.replace(prefix, ''));
+  console.log(`[S3] Deleted ${deleted.length} files from ${prefix}:`, deleted);
+  return { deleted };
 }
