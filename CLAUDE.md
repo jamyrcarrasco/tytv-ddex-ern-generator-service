@@ -75,7 +75,7 @@ This service is not yet production-ready. Below is everything that must be done 
 **[x] DELETE endpoint for S3 cleanup**
 `DELETE /api/ddex/ingestion/:upc` — lists and batch-deletes all files under `{basePath}/{UPC}/`. Returns `200 { deleted[] }`, `404` if folder was empty, `400` if UPC missing. Implemented in `s3Service.deleteReleaseFromS3` + `ddexRoutes`.
 
-**[ ] Ingestion tracking table in the main backend DB**
+**[x] Ingestion tracking table in the main backend DB**
 The main TranKYouTV backend must persist the result of every upload to support fallbacks, re-ingestion, and auditing. Suggested schema:
 
 ```sql
@@ -95,13 +95,13 @@ CREATE TABLE release_ingestions (
 );
 ```
 
-**[ ] Rollback on partial S3 upload failure**
+**[x] Rollback on partial S3 upload failure**
 Currently, if a file copy fails midway the S3 folder is left in a dirty state (some files present, `delivery.complete` never uploaded). The upload must either succeed fully or clean up after itself. Implement try/catch around `uploadReleaseForAudioSalad` that calls the delete logic on any error before re-throwing.
 
-**[ ] Idempotency guard**
+**[x] Idempotency guard**
 Calling the endpoint twice for the same release silently overwrites files in S3. Before uploading, check if the UPC folder already contains a `delivery.complete` file and return a 409 Conflict with a message directing the caller to delete first.
 
-**[ ] Source file validation before copy**
+**[x] Source file validation before copy**
 Before attempting to copy audio/image files from the source bucket, verify they exist with a `HeadObjectCommand`. A missing source file currently throws a cryptic S3 error. Return a clear 400 with the missing file URL so the caller knows what to fix.
 
 ### Priority 2 — Operational

@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getReleaseWithDetails } from '../repositories/releaseRepository';
 import { generateDdexXml } from '../services/ddexGenerator';
 import { generateAudioSaladDdexXml } from '../services/AudioSalad_ddexGenerator';
-import { uploadReleaseForAudioSalad, deleteReleaseFromS3 } from '../services/s3Service';
+import { uploadReleaseForAudioSalad, deleteReleaseFromS3, checkDeliveryComplete, SourceFileMissingError } from '../services/s3Service';
 import { DdexGeneratorType } from '../types/ddex';
 
 const router = Router();
@@ -148,6 +148,15 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
     }
 
     if (generatorType === 'audiosalad') {
+      const alreadyDelivered = await checkDeliveryComplete(releaseData.release.upc);
+      if (alreadyDelivered) {
+        res.status(409).json({
+          error: 'Conflict',
+          message: `UPC ${releaseData.release.upc} already has an active ingestion. Call DELETE /api/ddex/ingestion/${releaseData.release.upc} first.`,
+        });
+        return;
+      }
+
       const ddexXml = generateAudioSaladDdexXml(releaseData);
       const s3Result = await uploadReleaseForAudioSalad(releaseData, ddexXml);
       res.status(200).json({
@@ -165,6 +174,14 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('X-Generator-Type', generatorType);
     res.status(200).send(ddexXml);
   } catch (error) {
+    if (error instanceof SourceFileMissingError) {
+      res.status(400).json({
+        error: 'Bad Request',
+        message: 'One or more source files are missing in S3. Fix the file URLs and try again.',
+        missingFiles: error.missingUrls,
+      });
+      return;
+    }
     console.error('Error generating DDEX XML:', error);
     res.status(500).json({
       error: 'Internal Server Error',

@@ -1,4 +1,4 @@
-import { S3Client, CopyObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { S3Client, CopyObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { config } from '../config/env';
 import { ReleaseWithDetails } from '../types/ddex';
 import {
@@ -6,6 +6,13 @@ import {
   getAudioSaladImageFilename,
   getAudioSaladXmlFilename,
 } from './AudioSalad_ddexGenerator';
+
+export class SourceFileMissingError extends Error {
+  constructor(public readonly missingUrls: string[]) {
+    super(`Source files not found in S3: ${missingUrls.join(', ')}`);
+    this.name = 'SourceFileMissingError';
+  }
+}
 
 const s3Client = new S3Client({
   region: config.s3.region,
@@ -19,6 +26,19 @@ export interface S3UploadResult {
   s3_bucket: string;
   s3_path: string;
   files: string[];
+}
+
+async function validateSourceExists(url: string): Promise<boolean> {
+  const { bucket, key } = parseS3Url(url);
+  try {
+    await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err: any) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === 'NotFound' || err.name === 'NoSuchKey') {
+      return false;
+    }
+    throw err;
+  }
 }
 
 function parseS3Url(url: string): { bucket: string; key: string } {
@@ -81,38 +101,59 @@ export async function uploadReleaseForAudioSalad(
   console.log(`[S3] Starting upload for release ${release.id} (UPC: ${release.upc}) → ${config.s3.ingestBucket}/${destPrefix}`);
   console.log(`[S3] Tracks to copy: ${tracks.length}`);
 
-  // Copy audio files with AudioSalad naming: {UPC}_1_{trackNumber}.{ext}
+  // Pre-flight: verify all source files exist before touching the ingest bucket
+  const missingUrls: string[] = [];
   for (const track of tracks) {
-    if (track.sound_url) {
-      const filename = getAudioSaladAudioFilename(release.upc, track.number, track.sound_url);
-      console.log(`[S3] [${tracks.indexOf(track) + 1}/${tracks.length}] Audio: "${track.song_name}" → ${filename}`);
-      await copyS3Object(track.sound_url, `${destPrefix}/${filename}`);
-      uploadedFiles.push(filename);
-    } else {
-      console.warn(`[S3] Track "${track.song_name}" has no sound_url, skipping`);
+    if (track.sound_url && !(await validateSourceExists(track.sound_url))) {
+      missingUrls.push(track.sound_url);
     }
   }
-
-  // Copy cover image with AudioSalad naming: {UPC}.{ext}
-  if (release.front_pic) {
-    const filename = getAudioSaladImageFilename(release.upc, release.front_pic);
-    console.log(`[S3] Cover image → ${filename}`);
-    await copyS3Object(release.front_pic, `${destPrefix}/${filename}`);
-    uploadedFiles.push(filename);
-  } else {
-    console.warn(`[S3] Release ${release.id} has no cover image`);
+  if (release.front_pic && !(await validateSourceExists(release.front_pic))) {
+    missingUrls.push(release.front_pic);
+  }
+  if (missingUrls.length > 0) {
+    console.error(`[S3] Pre-flight failed — missing source files:`, missingUrls);
+    throw new SourceFileMissingError(missingUrls);
   }
 
-  // Upload XML with AudioSalad naming: {UPC}.xml
-  const xmlFilename = getAudioSaladXmlFilename(release.upc);
-  await uploadContent(`${destPrefix}/${xmlFilename}`, xmlContent, 'application/xml');
-  uploadedFiles.push(xmlFilename);
+  try {
+    // Copy audio files with AudioSalad naming: {UPC}_1_{trackNumber}.{ext}
+    for (const track of tracks) {
+      if (track.sound_url) {
+        const filename = getAudioSaladAudioFilename(release.upc, track.number, track.sound_url);
+        console.log(`[S3] [${tracks.indexOf(track) + 1}/${tracks.length}] Audio: "${track.song_name}" → ${filename}`);
+        await copyS3Object(track.sound_url, `${destPrefix}/${filename}`);
+        uploadedFiles.push(filename);
+      } else {
+        console.warn(`[S3] Track "${track.song_name}" has no sound_url, skipping`);
+      }
+    }
 
-  // Upload delivery.complete handshake file
-  const handshakeFilename = 'delivery.complete';
-  console.log(`[S3] Uploading handshake → ${destPrefix}/${handshakeFilename}`);
-  await uploadContent(`${destPrefix}/${handshakeFilename}`, '', 'application/octet-stream');
-  uploadedFiles.push(handshakeFilename);
+    // Copy cover image with AudioSalad naming: {UPC}.{ext}
+    if (release.front_pic) {
+      const filename = getAudioSaladImageFilename(release.upc, release.front_pic);
+      console.log(`[S3] Cover image → ${filename}`);
+      await copyS3Object(release.front_pic, `${destPrefix}/${filename}`);
+      uploadedFiles.push(filename);
+    } else {
+      console.warn(`[S3] Release ${release.id} has no cover image`);
+    }
+
+    // Upload XML with AudioSalad naming: {UPC}.xml
+    const xmlFilename = getAudioSaladXmlFilename(release.upc);
+    await uploadContent(`${destPrefix}/${xmlFilename}`, xmlContent, 'application/xml');
+    uploadedFiles.push(xmlFilename);
+
+    // Upload delivery.complete handshake file
+    const handshakeFilename = 'delivery.complete';
+    console.log(`[S3] Uploading handshake → ${destPrefix}/${handshakeFilename}`);
+    await uploadContent(`${destPrefix}/${handshakeFilename}`, '', 'application/octet-stream');
+    uploadedFiles.push(handshakeFilename);
+  } catch (err) {
+    console.error(`[S3] Upload failed for UPC ${release.upc}, rolling back ${uploadedFiles.length} uploaded files`, err);
+    await deleteReleaseFromS3(release.upc);
+    throw err;
+  }
 
   console.log(`[S3] Done. ${uploadedFiles.length} files in ${destPrefix}:`, uploadedFiles);
 
@@ -121,6 +162,19 @@ export async function uploadReleaseForAudioSalad(
     s3_path: destPrefix,
     files: uploadedFiles,
   };
+}
+
+export async function checkDeliveryComplete(upc: string): Promise<boolean> {
+  const key = `${config.s3.ingestBasePath}/${upc}/delivery.complete`;
+  try {
+    await s3Client.send(new HeadObjectCommand({ Bucket: config.s3.ingestBucket, Key: key }));
+    return true;
+  } catch (err: any) {
+    if (err.$metadata?.httpStatusCode === 404 || err.name === 'NotFound' || err.name === 'NoSuchKey') {
+      return false;
+    }
+    throw err;
+  }
 }
 
 export async function deleteReleaseFromS3(upc: string): Promise<{ deleted: string[] }> {
