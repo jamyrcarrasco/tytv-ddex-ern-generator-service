@@ -6,6 +6,7 @@ import {
   getAudioSaladImageFilename,
   getAudioSaladXmlFilename,
 } from './AudioSalad_ddexGenerator';
+import logger from '../config/logger';
 
 export class SourceFileMissingError extends Error {
   constructor(public readonly missingUrls: string[]) {
@@ -46,14 +47,12 @@ function parseS3Url(url: string): { bucket: string; key: string } {
   const hostParts = parsed.hostname.split('.');
 
   if (hostParts[1] === 's3') {
-    // Virtual-hosted style: bucket.s3.region.amazonaws.com/key
     return {
       bucket: hostParts[0],
       key: parsed.pathname.substring(1),
     };
   }
 
-  // Path style: s3.amazonaws.com/bucket/key
   const pathParts = parsed.pathname.substring(1).split('/');
   return {
     bucket: pathParts[0],
@@ -65,7 +64,7 @@ async function copyS3Object(sourceUrl: string, destKey: string): Promise<void> {
   const { bucket: sourceBucket, key: sourceKey } = parseS3Url(sourceUrl);
   const copySource = `${sourceBucket}/${sourceKey}`;
 
-  console.log(`[S3] Copying: ${copySource} → ${config.s3.ingestBucket}/${destKey}`);
+  logger.info({ destKey, copySource }, 'S3 copy started');
   await s3Client.send(
     new CopyObjectCommand({
       CopySource: copySource,
@@ -73,11 +72,11 @@ async function copyS3Object(sourceUrl: string, destKey: string): Promise<void> {
       Key: destKey,
     })
   );
-  console.log(`[S3] Copied OK: ${destKey}`);
+  logger.info({ destKey }, 'S3 copy done');
 }
 
 async function uploadContent(destKey: string, body: string, contentType: string): Promise<void> {
-  console.log(`[S3] Uploading → ${config.s3.ingestBucket}/${destKey} (${body.length} bytes, ${contentType})`);
+  logger.info({ destKey, contentType, bytes: body.length }, 'S3 upload started');
   await s3Client.send(
     new PutObjectCommand({
       Bucket: config.s3.ingestBucket,
@@ -86,7 +85,7 @@ async function uploadContent(destKey: string, body: string, contentType: string)
       ContentType: contentType,
     })
   );
-  console.log(`[S3] Uploaded OK: ${destKey}`);
+  logger.info({ destKey }, 'S3 upload done');
 }
 
 export async function uploadReleaseForAudioSalad(
@@ -94,12 +93,10 @@ export async function uploadReleaseForAudioSalad(
   xmlContent: string
 ): Promise<S3UploadResult> {
   const { release, tracks } = releaseData;
-  // AudioSalad folder is named by UPC, not release ID
   const destPrefix = `${config.s3.ingestBasePath}/${release.upc}`;
   const uploadedFiles: string[] = [];
 
-  console.log(`[S3] Starting upload for release ${release.id} (UPC: ${release.upc}) → ${config.s3.ingestBucket}/${destPrefix}`);
-  console.log(`[S3] Tracks to copy: ${tracks.length}`);
+  logger.info({ releaseId: release.id, upc: release.upc, trackCount: tracks.length }, 'AudioSalad upload started');
 
   // Pre-flight: verify all source files exist before touching the ingest bucket
   const missingUrls: string[] = [];
@@ -112,50 +109,45 @@ export async function uploadReleaseForAudioSalad(
     missingUrls.push(release.front_pic);
   }
   if (missingUrls.length > 0) {
-    console.error(`[S3] Pre-flight failed — missing source files:`, missingUrls);
+    logger.error({ releaseId: release.id, upc: release.upc, missingUrls }, 'Pre-flight failed — missing source files');
     throw new SourceFileMissingError(missingUrls);
   }
 
   try {
-    // Copy audio files with AudioSalad naming: {UPC}_1_{trackNumber}.{ext}
     for (const track of tracks) {
       if (track.sound_url) {
         const filename = getAudioSaladAudioFilename(release.upc, track.number, track.sound_url);
-        console.log(`[S3] [${tracks.indexOf(track) + 1}/${tracks.length}] Audio: "${track.song_name}" → ${filename}`);
+        logger.info({ releaseId: release.id, upc: release.upc, track: track.song_name, filename }, 'Copying audio file');
         await copyS3Object(track.sound_url, `${destPrefix}/${filename}`);
         uploadedFiles.push(filename);
       } else {
-        console.warn(`[S3] Track "${track.song_name}" has no sound_url, skipping`);
+        logger.warn({ releaseId: release.id, upc: release.upc, track: track.song_name }, 'Track has no sound_url, skipping');
       }
     }
 
-    // Copy cover image with AudioSalad naming: {UPC}.{ext}
     if (release.front_pic) {
       const filename = getAudioSaladImageFilename(release.upc, release.front_pic);
-      console.log(`[S3] Cover image → ${filename}`);
+      logger.info({ releaseId: release.id, upc: release.upc, filename }, 'Copying cover image');
       await copyS3Object(release.front_pic, `${destPrefix}/${filename}`);
       uploadedFiles.push(filename);
     } else {
-      console.warn(`[S3] Release ${release.id} has no cover image`);
+      logger.warn({ releaseId: release.id, upc: release.upc }, 'Release has no cover image');
     }
 
-    // Upload XML with AudioSalad naming: {UPC}.xml
     const xmlFilename = getAudioSaladXmlFilename(release.upc);
     await uploadContent(`${destPrefix}/${xmlFilename}`, xmlContent, 'application/xml');
     uploadedFiles.push(xmlFilename);
 
-    // Upload delivery.complete handshake file
     const handshakeFilename = 'delivery.complete';
-    console.log(`[S3] Uploading handshake → ${destPrefix}/${handshakeFilename}`);
     await uploadContent(`${destPrefix}/${handshakeFilename}`, '', 'application/octet-stream');
     uploadedFiles.push(handshakeFilename);
   } catch (err) {
-    console.error(`[S3] Upload failed for UPC ${release.upc}, rolling back ${uploadedFiles.length} uploaded files`, err);
+    logger.error({ err, releaseId: release.id, upc: release.upc, uploadedCount: uploadedFiles.length }, 'Upload failed, rolling back');
     await deleteReleaseFromS3(release.upc);
     throw err;
   }
 
-  console.log(`[S3] Done. ${uploadedFiles.length} files in ${destPrefix}:`, uploadedFiles);
+  logger.info({ releaseId: release.id, upc: release.upc, files: uploadedFiles }, 'AudioSalad upload complete');
 
   return {
     s3_bucket: config.s3.ingestBucket,
@@ -180,7 +172,7 @@ export async function checkDeliveryComplete(upc: string): Promise<boolean> {
 export async function deleteReleaseFromS3(upc: string): Promise<{ deleted: string[] }> {
   const prefix = `${config.s3.ingestBasePath}/${upc}/`;
 
-  console.log(`[S3] Listing objects to delete: ${config.s3.ingestBucket}/${prefix}`);
+  logger.info({ upc, prefix }, 'Listing S3 objects for deletion');
   const listResult = await s3Client.send(
     new ListObjectsV2Command({
       Bucket: config.s3.ingestBucket,
@@ -191,7 +183,7 @@ export async function deleteReleaseFromS3(upc: string): Promise<{ deleted: strin
   const objects = listResult.Contents ?? [];
 
   if (objects.length === 0) {
-    console.log(`[S3] No files found under ${prefix}`);
+    logger.info({ upc }, 'No files found for deletion');
     return { deleted: [] };
   }
 
@@ -206,6 +198,6 @@ export async function deleteReleaseFromS3(upc: string): Promise<{ deleted: strin
   );
 
   const deleted = objects.map((o) => o.Key!.replace(prefix, ''));
-  console.log(`[S3] Deleted ${deleted.length} files from ${prefix}:`, deleted);
+  logger.info({ upc, deletedCount: deleted.length, files: deleted }, 'S3 deletion complete');
   return { deleted };
 }

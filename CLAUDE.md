@@ -106,7 +106,7 @@ Before attempting to copy audio/image files from the source bucket, verify they 
 
 ### Priority 2 — Operational
 
-**[ ] Structured JSON logging**
+**[x] Structured JSON logging**
 Replace all `console.log` / `console.warn` / `console.error` with a structured logger (e.g. `pino`). Each log line should include at minimum: `level`, `timestamp`, `releaseId`, `upc`, `message`. This is required for any log aggregation tool (CloudWatch, Datadog, etc.).
 
 **[ ] Health check with real DB ping**

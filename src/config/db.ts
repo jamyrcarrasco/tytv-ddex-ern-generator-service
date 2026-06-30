@@ -1,9 +1,7 @@
 import mysql from 'mysql2/promise';
 import { config } from './env';
+import logger from './logger';
 
-/**
- * MySQL connection pool
- */
 export const pool = mysql.createPool({
   host: config.db.host,
   user: config.db.user,
@@ -16,31 +14,24 @@ export const pool = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
-/**
- * Test database connection
- */
 export async function testConnection(): Promise<boolean> {
   try {
     const connection = await pool.getConnection();
     await connection.ping();
     connection.release();
-    console.log('✓ Database connection established successfully');
+    logger.info('Database connection established successfully');
     return true;
   } catch (error) {
-    console.error('✗ Database connection failed:', error);
+    logger.error({ err: error }, 'Database connection failed');
     return false;
   }
 }
 
-/**
- * Close all database connections
- */
 export async function closePool(): Promise<void> {
   try {
     await pool.end();
-    console.log('✓ Database pool closed');
+    logger.info('Database pool closed');
   } catch (error) {
-    console.error('✗ Error closing database pool:', error);
+    logger.error({ err: error }, 'Error closing database pool');
   }
 }
-

@@ -4,6 +4,7 @@ import { generateDdexXml } from '../services/ddexGenerator';
 import { generateAudioSaladDdexXml } from '../services/AudioSalad_ddexGenerator';
 import { uploadReleaseForAudioSalad, deleteReleaseFromS3, checkDeliveryComplete, SourceFileMissingError } from '../services/s3Service';
 import { DdexGeneratorType } from '../types/ddex';
+import logger from '../config/logger';
 
 const router = Router();
 
@@ -47,8 +48,7 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
 
     // Fetch release data from database
     const releaseData = await getReleaseWithDetails(releaseIdNum);
-    console.log("releaseData", releaseData);
-    
+
     if (!releaseData) {
       res.status(404).json({
         error: 'Not Found',
@@ -182,7 +182,7 @@ router.post('/generate', async (req: Request, res: Response): Promise<void> => {
       });
       return;
     }
-    console.error('Error generating DDEX XML:', error);
+    logger.error({ err: error }, 'Error generating DDEX XML');
     res.status(500).json({
       error: 'Internal Server Error',
       message: 'An error occurred while generating DDEX XML',
@@ -212,7 +212,7 @@ router.delete('/ingestion/:upc', async (req: Request, res: Response): Promise<vo
 
     res.status(200).json({ success: true, upc, deleted: result.deleted });
   } catch (error) {
-    console.error(`Error deleting S3 ingestion for UPC ${upc}:`, error);
+    logger.error({ err: error, upc }, 'Error deleting S3 ingestion');
     res.status(500).json({
       error: 'Internal Server Error',
       message: 'An error occurred while deleting the ingestion files',

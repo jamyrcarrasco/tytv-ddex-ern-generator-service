@@ -1,14 +1,12 @@
 import { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../config/db';
 import { Release, Track, TrackArtist, ReleaseWithDetails } from '../types/ddex';
+import logger from '../config/logger';
 
-/**
- * Fetch release metadata by ID with all relations
- */
 export async function getReleaseById(releaseId: number): Promise<Release | null> {
   try {
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT 
+      `SELECT
         r.*,
         l.name as label_name,
         l.logo as label_logo,
@@ -32,18 +30,15 @@ export async function getReleaseById(releaseId: number): Promise<Release | null>
 
     return rows[0] as Release;
   } catch (error) {
-    console.error('Error fetching release:', error);
+    logger.error({ err: error, releaseId }, 'Error fetching release');
     throw new Error('Failed to fetch release from database');
   }
 }
 
-/**
- * Fetch all tracks for a given release with genres and languages
- */
 export async function getTracksByReleaseId(releaseId: number): Promise<Track[]> {
   try {
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT 
+      `SELECT
         t.*,
         mg.name as main_genre_name,
         mg.name_en as main_genre_en,
@@ -66,14 +61,11 @@ export async function getTracksByReleaseId(releaseId: number): Promise<Track[]> 
 
     return rows as Track[];
   } catch (error) {
-    console.error('Error fetching tracks:', error);
+    logger.error({ err: error, releaseId }, 'Error fetching tracks');
     throw new Error('Failed to fetch tracks from database');
   }
 }
 
-/**
- * Fetch all artists for specific tracks with their roles
- */
 export async function getTrackArtists(trackIds: number[]): Promise<TrackArtist[]> {
   try {
     if (trackIds.length === 0) {
@@ -82,7 +74,7 @@ export async function getTrackArtists(trackIds: number[]): Promise<TrackArtist[]
 
     const placeholders = trackIds.map(() => '?').join(',');
     const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT 
+      `SELECT
         ta.*,
         u.artist_name,
         u.artist_name as stage_name,
@@ -99,17 +91,14 @@ export async function getTrackArtists(trackIds: number[]): Promise<TrackArtist[]
 
     return rows as TrackArtist[];
   } catch (error) {
-    console.error('Error fetching track artists:', error);
+    logger.error({ err: error, trackIds }, 'Error fetching track artists');
     throw new Error('Failed to fetch track artists from database');
   }
 }
 
-/**
- * Group track artists by track ID
- */
 function groupArtistsByTrack(artists: TrackArtist[]): Map<number, TrackArtist[]> {
   const grouped = new Map<number, TrackArtist[]>();
-  
+
   for (const artist of artists) {
     const trackId = artist.release_track_id;
     if (!grouped.has(trackId)) {
@@ -117,50 +106,35 @@ function groupArtistsByTrack(artists: TrackArtist[]): Map<number, TrackArtist[]>
     }
     grouped.get(trackId)!.push(artist);
   }
-  
+
   return grouped;
 }
 
-/**
- * Fetch complete release with all related data
- */
 export async function getReleaseWithDetails(releaseId: number): Promise<ReleaseWithDetails | null> {
   try {
-    // Fetch release
     const release = await getReleaseById(releaseId);
-    
+
     if (!release) {
       return null;
     }
 
-    // Fetch tracks
     const tracks = await getTracksByReleaseId(releaseId);
 
     if (tracks.length === 0) {
-      return {
-        release,
-        tracks: [],
-      };
+      return { release, tracks: [] };
     }
 
-    // Fetch track artists
     const trackIds = tracks.map(t => t.id);
     const trackArtists = await getTrackArtists(trackIds);
-    
-    // Group artists by track
     const artistsByTrack = groupArtistsByTrack(trackArtists);
-    
-    // Attach artists to their tracks
+
     for (const track of tracks) {
       track.artists = artistsByTrack.get(track.id) || [];
     }
 
-    return {
-      release,
-      tracks,
-    };
+    return { release, tracks };
   } catch (error) {
-    console.error('Error fetching release with details:', error);
+    logger.error({ err: error, releaseId }, 'Error fetching release with details');
     throw new Error('Failed to fetch complete release data');
   }
 }
