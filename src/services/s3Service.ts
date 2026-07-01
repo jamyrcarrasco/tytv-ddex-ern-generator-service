@@ -1,4 +1,5 @@
 import { S3Client, CopyObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { config } from '../config/env';
 import { ReleaseWithDetails } from '../types/ddex';
 import {
@@ -21,6 +22,11 @@ const s3Client = new S3Client({
     accessKeyId: config.s3.accessKeyId,
     secretAccessKey: config.s3.secretAccessKey,
   },
+  maxAttempts: config.s3.maxAttempts,
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: config.s3.connectionTimeout,
+    requestTimeout: config.s3.requestTimeout,
+  }),
 });
 
 export interface S3UploadResult {

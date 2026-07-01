@@ -14,6 +14,17 @@ export const pool = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
+export async function pingDb(): Promise<boolean> {
+  try {
+    const connection = await pool.getConnection();
+    await connection.query('SELECT 1');
+    connection.release();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function testConnection(): Promise<boolean> {
   try {
     const connection = await pool.getConnection();

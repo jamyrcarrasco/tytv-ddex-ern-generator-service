@@ -109,10 +109,10 @@ Before attempting to copy audio/image files from the source bucket, verify they 
 **[x] Structured JSON logging**
 Replace all `console.log` / `console.warn` / `console.error` with a structured logger (e.g. `pino`). Each log line should include at minimum: `level`, `timestamp`, `releaseId`, `upc`, `message`. This is required for any log aggregation tool (CloudWatch, Datadog, etc.).
 
-**[ ] Health check with real DB ping**
+**[x] Health check with real DB ping**
 `GET /api/ddex/health` currently returns `ok` unconditionally. It should also run a lightweight DB query (e.g. `SELECT 1`) and return 503 if the DB is unreachable.
 
-**[ ] S3 operation timeout / retry**
+**[x] S3 operation timeout / retry**
 Large audio files can cause S3 copy operations to hang. Configure a timeout and add retry logic (with exponential backoff) for transient S3 errors.
 
 **[ ] Per-environment S3 config**

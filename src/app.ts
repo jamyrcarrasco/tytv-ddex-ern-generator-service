@@ -2,6 +2,7 @@ import express, { Application, Request, Response, NextFunction } from 'express';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
 import ddexRoutes from './routes/ddexRoutes';
 import logger from './config/logger';
+import { pingDb } from './config/db';
 
 export function createApp(): Application {
   const app = express();
@@ -19,6 +20,17 @@ export function createApp(): Application {
       status: 'ok',
       service: 'tytv-ddex-ern-generator-service',
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.get('/api/ddex/health', async (_req: Request, res: Response): Promise<void> => {
+    const dbOk = await pingDb();
+    const status = dbOk ? 200 : 503;
+    res.status(status).json({
+      status: dbOk ? 'ok' : 'degraded',
+      service: 'tytv-ddex-ern-generator-service',
+      version: '1.0.0',
+      checks: { db: dbOk ? 'ok' : 'unreachable' },
     });
   });
 

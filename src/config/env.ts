@@ -19,6 +19,9 @@ interface Config {
     ingestBucket: string;
     ingestBasePath: string;
     distributorName: string;
+    connectionTimeout: number;
+    requestTimeout: number;
+    maxAttempts: number;
   };
 }
 
@@ -82,6 +85,9 @@ function loadConfig(): Config {
       ingestBucket: process.env.S3_INGEST_BUCKET as string,
       ingestBasePath: process.env.S3_INGEST_BASE_PATH as string,
       distributorName: process.env.AUDIOSALAD_DISTRIBUTOR_NAME as string,
+      connectionTimeout: parseInt(process.env.S3_CONNECTION_TIMEOUT || '5000', 10),
+      requestTimeout: parseInt(process.env.S3_REQUEST_TIMEOUT || '120000', 10),
+      maxAttempts: parseInt(process.env.S3_MAX_ATTEMPTS || '3', 10),
     },
   };
 }

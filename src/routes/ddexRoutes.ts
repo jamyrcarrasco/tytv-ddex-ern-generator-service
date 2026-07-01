@@ -220,17 +220,5 @@ router.delete('/ingestion/:upc', async (req: Request, res: Response): Promise<vo
   }
 });
 
-/**
- * GET /api/ddex/health
- * Health check endpoint (doesn't require API key)
- */
-router.get('/health', (_req: Request, res: Response): void => {
-  res.status(200).json({
-    status: 'ok',
-    service: 'tytv-ddex-ern-generator-service',
-    version: '1.0.0',
-  });
-});
-
 export default router;
 
