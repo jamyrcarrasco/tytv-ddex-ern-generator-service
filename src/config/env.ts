@@ -7,9 +7,11 @@ interface Config {
   port: number;
   db: {
     host: string;
+    port: number;
     user: string;
     password: string;
     database: string;
+    sslCa?: string;
   };
   apiKeys: string[];
   s3: {
@@ -53,10 +55,17 @@ function loadConfig(): Config {
     );
   }
 
-  // Parse PORT
+  // Parse PORT (puerto del servidor Express)
   const port = parseInt(process.env.PORT as string, 10);
   if (isNaN(port) || port <= 0 || port > 65535) {
     throw new Error('PORT must be a valid number between 1 and 65535');
+  }
+
+  // Parse DB_PORT (opcional — default 3306 para MySQL local/dev).
+  // NO reutilizar `port` aquí: ese es el puerto del servidor Express, no el de la DB.
+  const dbPort = parseInt(process.env.DB_PORT || '3306', 10);
+  if (isNaN(dbPort) || dbPort <= 0 || dbPort > 65535) {
+    throw new Error('DB_PORT must be a valid number between 1 and 65535');
   }
 
   // Parse API_KEYS (comma-separated)
@@ -73,9 +82,12 @@ function loadConfig(): Config {
     port,
     db: {
       host: process.env.DB_HOST as string,
+      port: dbPort,
       user: process.env.DB_USER as string,
       password: process.env.DB_PASSWORD as string,
       database: process.env.DB_NAME as string,
+      // Opcional: solo presente en producción (DigitalOcean managed DB requiere SSL)
+      sslCa: process.env.DB_SSL_CA || undefined,
     },
     apiKeys,
     s3: {
@@ -93,4 +105,3 @@ function loadConfig(): Config {
 }
 
 export const config = loadConfig();
-
